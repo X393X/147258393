@@ -35,14 +35,28 @@ jobs:
           cp custom/assets/todaysunny.css build/assets/todaysunny.css
           cp custom/sections/*.liquid build/sections/
           python scripts/customize_theme.py build
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('build/locales/en.default.schema.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          node = data
+          for key in ('sections', 'main-product', 'blocks', 'icon_with_text', 'settings', 'content'):
+              node = node.setdefault(key, {})
+          node.setdefault('label', 'Content')
+          node.setdefault('info', 'Use text or a dynamic source.')
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          print('Patched upstream Dawn schema translation entries')
+          PY
 
       - name: Validate generated theme structure
         run: |
           mkdir -p dist
           python scripts/validate_theme.py build | tee dist/verification-report.txt
 
-      - name: Install Shopify CLI and Theme tools
-        run: npm install --global @shopify/cli@latest @shopify/theme@latest
+      - name: Install Shopify CLI
+        run: npm install --global @shopify/cli@latest
 
       - name: Run Shopify Theme Check
         run: |
@@ -62,10 +76,12 @@ jobs:
           unzip -t dist/todaysunny-current-ease-theme.zip
           unzip -t dist/todaysunny-current-ease-full-package.zip
           python - <<'PY'
-          import json, zipfile
+          import json
+          import zipfile
           from pathlib import Path
+
           theme = Path('dist/todaysunny-current-ease-theme.zip')
-          required = {'assets','config','layout','locales','sections','snippets','templates'}
+          required = {'assets', 'config', 'layout', 'locales', 'sections', 'snippets', 'templates'}
           with zipfile.ZipFile(theme) as archive:
               names = archive.namelist()
               roots = {name.split('/', 1)[0] for name in names if '/' in name}
