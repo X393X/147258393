@@ -1,0 +1,89 @@
+name: Build Todaysunny Shopify Theme
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-theme:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout build workspace
+        uses: actions/checkout@v4
+
+      - name: Extract Todaysunny source payload
+        run: python extract_payload.py
+
+      - name: Test custom brand layer
+        run: |
+          python -m pip install --quiet pytest
+          pytest -q
+
+      - name: Clone official Shopify Dawn v15.4.1
+        run: |
+          git clone --depth 1 --branch v15.4.1 https://github.com/Shopify/dawn.git build
+          rm -rf build/.git
+
+      - name: Apply Todaysunny customization
+        run: |
+          cp custom/assets/todaysunny.css build/assets/todaysunny.css
+          cp custom/sections/*.liquid build/sections/
+          python scripts/customize_theme.py build
+
+      - name: Validate generated theme structure
+        run: |
+          mkdir -p dist
+          python scripts/validate_theme.py build | tee dist/verification-report.txt
+
+      - name: Install Shopify CLI and Theme tools
+        run: npm install --global @shopify/cli@latest @shopify/theme@latest
+
+      - name: Run Shopify Theme Check
+        run: |
+          set -o pipefail
+          shopify theme check --path build --fail-level error --no-color 2>&1 | tee dist/theme-check.txt
+
+      - name: Package upload theme and source package
+        run: |
+          cd build
+          zip -qr ../dist/todaysunny-current-ease-theme.zip assets config layout locales sections snippets templates
+          cd ..
+          zip -qr dist/todaysunny-current-ease-full-package.zip custom scripts docs tests .github README.md extract_payload.py payload dist/todaysunny-current-ease-theme.zip dist/verification-report.txt dist/theme-check.txt
+          sha256sum dist/todaysunny-current-ease-theme.zip dist/todaysunny-current-ease-full-package.zip > dist/SHA256SUMS.txt
+
+      - name: Verify ZIP archives
+        run: |
+          unzip -t dist/todaysunny-current-ease-theme.zip
+          unzip -t dist/todaysunny-current-ease-full-package.zip
+          python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          theme = Path('dist/todaysunny-current-ease-theme.zip')
+          required = {'assets','config','layout','locales','sections','snippets','templates'}
+          with zipfile.ZipFile(theme) as archive:
+              names = archive.namelist()
+              roots = {name.split('/', 1)[0] for name in names if '/' in name}
+              missing = required - roots
+              if missing:
+                  raise SystemExit(f'Missing ZIP roots: {sorted(missing)}')
+              if any(name.startswith('build/') for name in names):
+                  raise SystemExit('Upload ZIP contains an outer build directory')
+              for name in names:
+                  if name.endswith('.json'):
+                      json.loads(archive.read(name))
+          print('Upload ZIP root and JSON validation: PASS')
+          PY
+
+      - name: Upload verified build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: todaysunny-current-ease-build
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
